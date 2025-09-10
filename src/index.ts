@@ -39,7 +39,8 @@ export interface LegacyCompletionRequest {
 }
 
 export interface LegacyCompletionChoice {
-  text: string;
+  message?: OpenAI.ChatCompletionMessageParam;
+  delta?: OpenAI.ChatCompletionMessageParam;
   index: number;
   logprobs: null;
   finish_reason: string | null;
@@ -49,11 +50,17 @@ export interface LegacyCompletionUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+  };
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+  };
 }
 
 export interface LegacyCompletionResponse {
   id: string;
-  object: "text_completion";
+  object: "chat.completion";
   created: number;
   model: string;
   choices: LegacyCompletionChoice[];
@@ -62,7 +69,7 @@ export interface LegacyCompletionResponse {
 
 export interface LegacyCompletionStreamChunk {
   id?: string;
-  object: "text_completion.chunk";
+  object: "chat.completion.chunk";
   choices: Array<{
     text: string;
     index: number;
@@ -73,9 +80,6 @@ export interface LegacyCompletionStreamChunk {
 export type LegacyCompletionStreamFinal = LegacyCompletionResponse
 
 export interface CompletionAdapterOptions {
-  multiStrategy?: "parallel" | "prompt_split" | "first_only";
-  promptSplitDelimiter?: string;
-  promptSplitInstruction?: string;
   attachRawResponses?: boolean;
 }
 
@@ -91,7 +95,7 @@ function completionRequestToResponses(legacyReq: LegacyCompletionRequest) {
     stop,
     presence_penalty,
     frequency_penalty,
-    // user
+    ...rest
   } = legacyReq;
 
   const req: Record<string, any> = {
@@ -103,10 +107,7 @@ function completionRequestToResponses(legacyReq: LegacyCompletionRequest) {
     stop,
     presence_penalty,
     frequency_penalty,
-    metadata: {
-      // compat_source: "legacy_completion",
-      // user
-    }
+    ...rest,
   };
 
   Object.keys(req).forEach(k => {
@@ -118,7 +119,7 @@ function completionRequestToResponses(legacyReq: LegacyCompletionRequest) {
   return req;
 }
 
-function responsesToCompletion(responsesObj: any): LegacyCompletionResponse {
+function responsesToCompletion(responsesObj: OpenAI.Responses.Response): LegacyCompletionResponse {
   const allText = (responsesObj.output || [])
     .flatMap((o: any) =>
       (o.content || [])
@@ -130,16 +131,25 @@ function responsesToCompletion(responsesObj: any): LegacyCompletionResponse {
   const finishReason =
     responsesObj.status === "completed"
       ? "stop"
-      : (responsesObj.status_details && responsesObj.status_details.type) || "stop";
+      : responsesObj.incomplete_details?.reason || "stop";
+
+  console.log('>>>>>');
+  console.dir(responsesObj, {
+    depth: 10,
+  });
+  console.log('<<<<<');
 
   return {
     id: responsesObj.id,
-    object: "text_completion",
-    created: responsesObj.created || Math.floor(Date.now() / 1000),
+    object: "chat.completion",
+    created: responsesObj.created_at || Math.floor(Date.now() / 1000),
     model: responsesObj.model,
     choices: [
       {
-        text: allText,
+        message: {
+          role: (responsesObj.output?.[0] as any)?.role,
+          content: allText,
+        },
         index: 0,
         logprobs: null,
         finish_reason: finishReason
@@ -148,13 +158,11 @@ function responsesToCompletion(responsesObj: any): LegacyCompletionResponse {
     usage: {
       prompt_tokens: responsesObj.usage?.input_tokens,
       completion_tokens: responsesObj.usage?.output_tokens,
-      total_tokens: responsesObj.usage?.total_tokens
+      total_tokens: responsesObj.usage?.total_tokens,
+      prompt_tokens_details: responsesObj.usage?.input_tokens_details,
+      completion_tokens_details: responsesObj.usage?.output_tokens_details,
     }
   };
-}
-
-function sum(nums: Array<number | undefined | null>): number {
-  return nums.reduce((acc, v) => (acc as number) + (typeof v === "number" ? v : 0), 0) as number;
 }
 
 //////////////////// 主类 ////////////////////
@@ -166,46 +174,22 @@ export class OpenAICompletionCompat {
     adapter?: CompletionAdapterOptions;
   }) {
     this.opts = {
-      multiStrategy: options?.adapter?.multiStrategy || "first_only",
-      promptSplitDelimiter: options?.adapter?.promptSplitDelimiter || "\n",
-      promptSplitInstruction:
-        options?.adapter?.promptSplitInstruction || "请生成 {n} 条结果，每条独立一行，不要额外解释。",
       attachRawResponses: options?.adapter?.attachRawResponses || false
     };
   }
 
   // 非流式
   async createCompletion(
-    legacyReq: LegacyCompletionRequest
+    legacyReq: LegacyCompletionRequest,
+    options?: OpenAI.RequestOptions,
   ): Promise<LegacyCompletionResponse & { rawResponses?: any | any[] }> {
-    const n = legacyReq.n ?? 1;
-
-    if (n === 1 || this.opts.multiStrategy === "first_only") {
-      const req = completionRequestToResponses(legacyReq);
-      const responsesResult = await this.client.responses.create(req);
-      const legacy = responsesToCompletion(responsesResult);
-      if (this.opts.attachRawResponses) {
-        (legacy as any).rawResponses = responsesResult;
-      }
-      return legacy;
+    const req = completionRequestToResponses(legacyReq);
+    const responsesResult = await this.client.responses.create(req, options);
+    const legacy = responsesToCompletion(responsesResult);
+    if (this.opts.attachRawResponses) {
+      (legacy as any).rawResponses = responsesResult;
     }
-
-    switch (this.opts.multiStrategy) {
-      case "parallel":
-        return this._multiParallel(legacyReq, n);
-      case "prompt_split":
-        return this._multiPromptSplit(legacyReq, n);
-      default:
-        {
-          const req2 = completionRequestToResponses(legacyReq);
-          const r2 = await this.client.responses.create(req2);
-          const legacy2 = responsesToCompletion(r2);
-          if (this.opts.attachRawResponses) {
-            (legacy2 as any).rawResponses = r2;
-          }
-          return legacy2;
-        }
-    }
+    return legacy;
   }
 
   /**
@@ -214,174 +198,110 @@ export class OpenAICompletionCompat {
    */
   async createCompletionStream(
     legacyReq: LegacyCompletionRequest,
-    handlers: {
-      onDelta?: (chunk: LegacyCompletionStreamChunk) => void;
-      onDone?: (finalResp: LegacyCompletionStreamFinal) => void;
-      onError?: (err: any) => void;
-    }
-  ): Promise<{ abort: () => Promise<void> | void }> {
-    if (legacyReq.n && legacyReq.n > 1) {
-      console.warn("流式暂不支持 n>1（你可以并行创建多条流）");
-    }
-
+    options?: OpenAI.RequestOptions,
+  ): Promise<AsyncIterable<LegacyCompletionStreamChunk> & {
+    controller: AbortController;
+  }> {
     const req = completionRequestToResponses(legacyReq);
 
     // SDK streaming：client.responses.stream(...)
-    let finalResponse: any = null;
+    let finalResponse: OpenAI.Responses.ResponseCompletedEvent['response'] | null = null;
     let fullText = "";
+    let role = "";
+    let type = "";
 
-    const stream = await this.client.responses.stream({
-      ...req
-    });
+    const stream = await this.client.responses.create({
+      ...req,
+      stream: true,
+    }, options);
 
-    (async () => {
-      try {
-        for await (const event of stream) {
-          switch (event.type) {
-            case "response.output_text.delta": {
-              const delta = event.delta || "";
-              fullText += delta;
-              handlers.onDelta?.({
-                id: event.item_id,
-                object: "text_completion.chunk",
-                choices: [
-                  {
-                    text: delta,
-                    index: 0,
-                    finish_reason: null
-                  }
-                ]
-              });
-              break;
+    const transformAsyncIterator = (async function* () {
+      for await (const event of stream) {
+        switch (event.type) {
+          case "response.output_item.added": {
+            type = event.item.type;
+            if (event.item.type === "message") {
+              role = event.item.role;
             }
-            case "response.output_text.done":
-              // 段落结束，不一定需要处理
-              break;
-            case "response.completed":
-              finalResponse = event.response;
-              break;
-            case "response.failed":
-              handlers.onError?.(event.response || event);
-              break;
+            break;
           }
-        }
-
-        // 流自然结束后
-        if (finalResponse) {
-          const legacy = responsesToCompletion(finalResponse);
-          legacy.choices[0].text = fullText; // 覆盖拼接
-          handlers.onDone?.(legacy as LegacyCompletionStreamFinal);
-        } else {
-          // 未拿到 completed（可能被 abort）
-          if (fullText.length > 0) {
-            handlers.onDone?.({
-              id: "unknown",
-              object: "text_completion",
-              created: Math.floor(Date.now() / 1000),
-              model: legacyReq.model,
-              choices: [{
-                text: fullText,
-                index: 0,
-                logprobs: null,
-                finish_reason: "stop"
-              }],
-              usage: {}
-            });
+          case "response.output_text.delta": {
+            const delta = event.delta || "";
+            fullText += delta;
+            yield {
+              id: event.item_id,
+              object: "chat.completion.chunk",
+              choices: [
+                {
+                  delta: {
+                    content: delta,
+                    role,
+                    type,
+                  },
+                  index: 0,
+                  finish_reason: null
+                }
+              ]
+            };
+            break;
           }
+          case "response.output_text.done":
+            // 段落结束，不一定需要处理
+            break;
+          case "response.completed":
+            finalResponse = event.response;
+            break;
+          case "response.failed":
+            yield event.response;
+            return;
         }
-      } catch (err) {
-        handlers.onError?.(err);
+      }
+      // 流自然结束后
+      if (finalResponse) {
+        yield {
+          ...responsesToCompletion(finalResponse),
+          choices: [{
+            delta: {
+              content: '',
+              role,
+              type,
+            },
+            finish_reason: 'stop',
+            index: 0,
+          }],
+        };
+      } else {
+        // 未拿到 completed（可能被 abort）
+        if (fullText.length > 0) {
+          yield {
+            id: "unknown",
+            object: "chat.completion",
+            created: Math.floor(Date.now() / 1000),
+            model: legacyReq.model,
+            choices: [{
+              delta: {
+                content: fullText,
+                role,
+                type,
+              },
+              index: 0,
+              logprobs: null,
+              finish_reason: "stop"
+            }],
+            usage: {}
+          };
+        }
       }
     })();
 
-    return {
-      abort: () => {
-        try {
-          stream.abort(); // SDK 提供的 abort
-        } catch {
-          // ignore
-        }
-      }
-    };
+    (transformAsyncIterator as any).controller = stream.controller;
+
+    return transformAsyncIterator as unknown as (AsyncIterable<LegacyCompletionStreamChunk> & {
+      controller: AbortController;
+    });
   }
 
-  //////////////////// 内部多输出策略 ////////////////////
 
-  private async _multiParallel(
-    legacyReq: LegacyCompletionRequest,
-    n: number
-  ): Promise<LegacyCompletionResponse & { rawResponses?: any[] }> {
-    const singleReq = { ...legacyReq, n: 1 };
-    const reqBody = completionRequestToResponses(singleReq);
-    const tasks = Array.from({ length: n }, () =>
-      this.client.responses.create(reqBody)
-    );
-    const results = await Promise.all(tasks);
-    const legacyResults = results.map(r => responsesToCompletion(r));
-
-    const merged: LegacyCompletionResponse = {
-      id: legacyResults[0].id,
-      object: "text_completion",
-      created: legacyResults[0].created,
-      model: legacyResults[0].model,
-      choices: legacyResults.map((c, idx) => ({
-        ...c.choices[0],
-        index: idx
-      })),
-      usage: {
-        prompt_tokens: sum(legacyResults.map(r => r.usage?.prompt_tokens)),
-        completion_tokens: sum(legacyResults.map(r => r.usage?.completion_tokens)),
-        total_tokens: sum(legacyResults.map(r => r.usage?.total_tokens))
-      }
-    };
-    if (this.opts.attachRawResponses) {
-      (merged as any).rawResponses = results;
-    }
-    return merged;
-  }
-
-  private async _multiPromptSplit(
-    legacyReq: LegacyCompletionRequest,
-    n: number
-  ): Promise<LegacyCompletionResponse & { rawResponses?: any }> {
-    const instruction = (this.opts.promptSplitInstruction || "").replace(/\{n\}/g, String(n));
-    const delimiter = this.opts.promptSplitDelimiter || "\n";
-    const combinedPrompt =
-      `${legacyReq.messages.map(m => m.content).join(delimiter)}\n\n${instruction}\n（输出每条占一行，共 ${n} 行）`;
-
-    const singleReq: LegacyCompletionRequest = {
-      ...legacyReq,
-      messages: [{ role: "user", content: combinedPrompt }],
-      n: 1
-    };
-
-    const reqBody = completionRequestToResponses(singleReq);
-    const responsesResult = await this.client.responses.create(reqBody);
-    const legacySingle = responsesToCompletion(responsesResult);
-    const rawText = legacySingle.choices[0].text.trim();
-
-    let lines = rawText.split(delimiter).map(l => l.trim()).filter(Boolean);
-    if (lines.length > n) lines = lines.slice(0, n);
-    while (lines.length < n) lines.push("");
-
-    const merged: LegacyCompletionResponse = {
-      id: legacySingle.id,
-      object: "text_completion",
-      created: legacySingle.created,
-      model: legacySingle.model,
-      choices: lines.map((txt, idx) => ({
-        text: txt,
-        index: idx,
-        logprobs: null,
-        finish_reason: "stop"
-      })),
-      usage: legacySingle.usage
-    };
-    if (this.opts.attachRawResponses) {
-      (merged as any).rawResponses = responsesResult;
-    }
-    return merged;
-  }
 }
 
 //////////////////// 使用示例 //////////////////////
