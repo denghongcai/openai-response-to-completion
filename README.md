@@ -1,6 +1,6 @@
-# Openai Response to Completion
+# Openai Responses to Completion
 
-A library to convert openai response to completion response.
+A library to convert openai responses to completion.
 
 ## Setup
 

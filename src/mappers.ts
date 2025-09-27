@@ -1,13 +1,14 @@
 import {
   ChatCompletion,
+  ChatCompletionChoice,
   ChatCompletionChunk,
   ChatCompletionCreateParams,
   ResponsesAPIRequest,
   ResponsesAPIResponse,
-} from "./types";
+} from './types';
 
 export function chatCompletionToResponsesRequest(
-  params: ChatCompletionCreateParams
+  params: ChatCompletionCreateParams,
 ): ResponsesAPIRequest {
   const {
     messages,
@@ -44,24 +45,23 @@ export function chatCompletionToResponsesRequest(
 }
 
 export function responsesResponseToChatCompletion(
-  response: ResponsesAPIResponse
+  response: ResponsesAPIResponse,
 ): ChatCompletion {
   const output = response.output?.[0] ?? {};
 
   const combinedText = (output.content || [])
-    .filter((c) => c.type === "output_text")
+    .filter((c) => c.type === 'output_text')
     .map((c) => c.text)
-    .join("");
+    .join('');
 
   const toolCalls = output.tool_calls;
 
   const finishReason =
-    (response.status_details
-      ?.type as ChatCompletion.Choice["finish_reason"]) ||
-    (response.status === "completed" ? "stop" : "stop");
+    (response.status_details?.type as ChatCompletionChoice['finish_reason']) ||
+    (response.status === 'completed' ? 'stop' : 'stop');
 
-  const message: ChatCompletion.Choice["message"] = {
-    role: "assistant",
+  const message: ChatCompletionChoice['message'] = {
+    role: 'assistant',
     content: combinedText || null,
   };
 
@@ -71,7 +71,7 @@ export function responsesResponseToChatCompletion(
 
   return {
     id: response.id,
-    object: "chat.completion",
+    object: 'chat.completion',
     created: response.created || Math.floor(Date.now() / 1000),
     model: response.model,
     choices: [
@@ -94,19 +94,19 @@ export function constructTextChunk(
   id: string,
   model: string,
   delta: string,
-  isFirst: boolean
+  isFirst: boolean,
 ): ChatCompletionChunk {
   return {
     id: id,
-    object: "chat.completion.chunk",
+    object: 'chat.completion.chunk',
     created: Math.floor(Date.now() / 1000),
     model: model,
     choices: [
       {
         index: 0,
         delta: {
-          ...(isFirst && { role: "assistant" }),
-          content: delta || "",
+          ...(isFirst && { role: 'assistant' }),
+          content: delta || '',
         },
         finish_reason: null,
       },
@@ -118,19 +118,19 @@ export function constructToolCallChunk(
   id: string,
   model: string,
   payload: any,
-  isFirst: boolean
+  isFirst: boolean,
 ): ChatCompletionChunk {
   const { index, ...delta } = payload;
   return {
     id: id,
-    object: "chat.completion.chunk",
+    object: 'chat.completion.chunk',
     created: Math.floor(Date.now() / 1000),
     model: model,
     choices: [
       {
         index: 0,
         delta: {
-          ...(isFirst && { role: "assistant" }),
+          ...(isFirst && { role: 'assistant' }),
           content: null,
           tool_calls: [
             {
@@ -147,16 +147,15 @@ export function constructToolCallChunk(
 
 export function constructFinalChunk(
   id: string,
-  response: ResponsesAPIResponse
+  response: ResponsesAPIResponse,
 ): ChatCompletionChunk {
   const finishReason =
-    (response.status_details
-      ?.type as ChatCompletion.Choice["finish_reason"]) ||
-    (response.status === "completed" ? "stop" : "stop");
+    (response.status_details?.type as ChatCompletionChoice['finish_reason']) ||
+    (response.status === 'completed' ? 'stop' : 'stop');
 
   return {
     id: id,
-    object: "chat.completion.chunk",
+    object: 'chat.completion.chunk',
     created: response.created || Math.floor(Date.now() / 1000),
     model: response.model,
     choices: [

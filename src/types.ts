@@ -1,12 +1,15 @@
-import type OpenAI from "openai";
+import type OpenAI from 'openai';
 
 // Official OpenAI types
 export type ChatCompletionCreateParams = OpenAI.Chat.ChatCompletionCreateParams;
 export type ChatCompletion = OpenAI.Chat.ChatCompletion;
+export type ChatCompletionChoice = OpenAI.Chat.ChatCompletion.Choice;
 export type ChatCompletionChunk = OpenAI.Chat.ChatCompletionChunk;
 export type ChatCompletionTool = OpenAI.Chat.ChatCompletionTool;
-export type ChatCompletionToolChoiceOption = OpenAI.Chat.ChatCompletionToolChoiceOption;
-export type ChatCompletionMessageToolCall = OpenAI.Chat.ChatCompletionMessageToolCall;
+export type ChatCompletionToolChoiceOption =
+  OpenAI.Chat.ChatCompletionToolChoiceOption;
+export type ChatCompletionMessageToolCall =
+  OpenAI.Chat.ChatCompletionMessageToolCall;
 
 /**
  * Represents the non-standard `responses` API request format.
@@ -39,7 +42,7 @@ export interface ResponsesAPIResponse {
   model: string;
   output: Array<{
     content?: Array<{
-      type: "output_text";
+      type: 'output_text';
       text: string;
     }>;
     // Support for Tool Calling
@@ -57,6 +60,6 @@ export interface ResponsesAPIResponse {
 }
 
 export interface AdapterOptions {
-  multiStrategy?: "parallel";
+  multiStrategy?: 'parallel';
   attachRawResponses?: boolean;
 }

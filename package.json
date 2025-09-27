@@ -1,6 +1,6 @@
 {
-  "name": "openai-response-to-completion",
-  "version": "1.0.0",
+  "name": "openai-responses-to-completion",
+  "version": "0.1.0",
   "type": "module",
   "exports": {
     ".": {
